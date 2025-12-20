@@ -6,10 +6,12 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
+install.packages(c("rmarkdown", "knitr"))
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r adat_beolvasas_es_elokeszites}
+```{r adat_beolvasas_es_elokeszites, echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE}
+
 # Csomagok betöltése
 if (!require("tidyverse")) install.packages("tidyverse")
 if (!require("readxl")) install.packages("readxl")
@@ -18,13 +20,439 @@ library(tidyverse)
 library(readxl)
 
 # --- ADATBEOLVASÁS ---
-# Kérlek, aktiváld (vedd ki a # jelet) a megfelelő fájlformátumhoz tartozó sor elől.
-
-# 1. Opció: Ha CSV fájl (feltételezve, hogy pontosvessző vagy vessző az elválasztó)
-# raw_data <- read_csv("RE_E_merge_1_87.csv") 
-
-# 2. Opció: Ha Excel fájl
 raw_data <- read_excel("RE_E_merge_1_87.xlsx")
 
 # Ellenőrzés: az első pár sor kiírása
 head(raw_data)
+```
+
+```{r demografiai_elemzes}
+
+# --- ADATSZŰRÉS (DISTINCT) ---
+
+# Adattábla, ahol minden ID csak egyszer szerepel.
+demografia_data <- raw_data %>%
+  distinct(ID, .keep_all = TRUE) %>% 
+  select(ID, sex, group) # Csak a szükséges oszlopokat tartjuk meg
+
+# 1) Összesen hány főből áll a minta
+total_N <- nrow(demografia_data)
+cat("1. A minta teljes elemszáma:", total_N, "fő\n\n")
+
+# 2) Összesen hány százalék nő
+nemek_oszlasa <- demografia_data %>%
+  count(sex) %>%
+  mutate(szazalek = n / sum(n) * 100)
+
+cat("2. Nemek megoszlása a teljes mintában:\n")
+print(nemek_oszlasa)
+cat("\n")
+
+# 3) A különböző csoportokban (normal, bp_hr, sz_hr) összesen hány fő van
+csoport_letszam <- demografia_data %>%
+  count(group)
+
+cat("3. Vizsgálati személyek száma csoportonként:\n")
+print(csoport_letszam)
+cat("\n")
+
+# 4) A különböző csoportok hány százaléka nő
+csoport_nem_szazalek <- demografia_data %>%
+  group_by(group, sex) %>%
+  count() %>%
+  group_by(group) %>% 
+  mutate(szazalek = round(n / sum(n) * 100, 2)) 
+
+cat("4. Nemek százalékos megoszlása csoportonként:\n")
+print(csoport_nem_szazalek)
+```
+
+```{r leiro_statisztika_csoportositva, message=TRUE, warning=TRUE, paged.print=FALSE}
+
+# --- ADATOK CSOPORTOSÍTÁSA (BINNING) ---
+processed_data <- raw_data %>%
+  mutate(prod_int = as.numeric(prod_int)) %>% 
+  mutate(
+    ref_category = case_when(
+      ref_frame %in% c(38, 39) ~ "38 mp (rövid)",
+      ref_frame %in% c(80, 81, 82) ~ "80 mp (közepes)",
+      ref_frame %in% c(109, 110, 111, 112) ~ "110 mp (hosszú)",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(ref_category)) %>% 
+ 
+   # Beállítjuk a sorrendet, hogy az ábrán növekvőben legyen, ne ABC sorrendben
+  mutate(ref_category = factor(ref_category, levels = c("38 mp (rövid)", "80 mp (közepes)", "110 mp (hosszú)")))
+
+# --- LEÍRÓ STATISZTIKA ---
+
+descriptive_stats <- processed_data %>%
+  group_by(group, ref_category) %>%
+  summarise(
+    N_obs = n(),                                     
+    Mean_Prod = mean(prod_int, na.rm = TRUE),        
+    SD_Prod = sd(prod_int, na.rm = TRUE),            
+    SE_Prod = sd(prod_int, na.rm = TRUE) / sqrt(n()) 
+  ) %>%
+  ungroup()
+
+print("Leíró statisztikák (Összevont ingerhosszok alapján):")
+print(descriptive_stats)
+```
+```{r vizualizacio_modositott}
+
+# --- ADATOK ELŐKÉSZÍTÉSE A VIZUALIZÁCIÓHOZ ---
+plot_data <- processed_data %>%
+  filter(group %in% c("normal", "sz_hr")) %>%
+  mutate(group = factor(group, 
+                        levels = c("sz_hr", "normal"), 
+                        labels = c("Skizotíp", "Kontrollcsoport")))
+
+# --- ÁBRÁZOLÁS ---
+plot_boxplot_filtered <- ggplot(plot_data, aes(x = ref_category, y = prod_int, fill = group)) +
+  geom_boxplot(outlier.alpha = 0.5, outlier.shape = 16) +
+  scale_fill_brewer(palette = "Set2") + 
+  labs(
+    title = "Reprodukált időtartamok: skizotíp vs. kontrollcsoport",
+    x = "Referencia Inger",
+    y = "Reprodukált Idő",
+    fill = "Vizsgálati Csoport"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right", 
+    text = element_text(size = 12),
+    plot.title = element_text(face = "bold")
+  )
+
+# Ábra megjelenítése
+print(plot_boxplot_filtered)
+```
+
+```{r lmm_h1}
+
+# Csomagok betöltése
+if (!require("lmerTest")) install.packages("lmerTest")
+if (!require("emmeans")) install.packages("emmeans")
+
+library(lmerTest)
+library(emmeans)
+
+# --- 1. ADATELŐKÉSZÍTÉS ---
+lmm_data <- processed_data %>%
+  filter(group %in% c("normal", "sz_hr")) %>%
+  mutate(
+    prod_int = as.numeric(gsub(",", ".", as.character(prod_int))),
+    ref_ms = as.numeric(gsub(",", ".", as.character(ref_ms)))
+  ) %>%
+  mutate(bias = prod_int - ref_ms) %>%
+  mutate(group = factor(group, levels = c("normal", "sz_hr")))
+
+# Ellenőrizzük, hogy sikerült-e a számítás (az első pár sor kiírása)
+print("Az adatok előkészítve, az első sorok:")
+print(head(lmm_data %>% select(ID, group, ref_ms, prod_int, bias)))
+
+# --- 2. MODELL ÉPÍTÉS ---
+# Bias ~ Csoport * Ingerhossz + (Random hatás: Személy)
+# Ez megvizsgálja:
+#   a) Van-e különbség a csoportok között? (Group hatás)
+#   b) Van-e különbség az ingerhosszak között? (Ref_category hatás)
+#   c) A csoportkülönbség függ-e az ingerhossztól? (Interakció)
+model_bias <- lmer(bias ~ group * ref_category + (1 | ID), data = lmm_data)
+
+# --- 3. EREDMÉNYEK (ANOVA TÁBLA) ---
+cat("\n--- A Modell ANOVA táblázata (Főhatások és Interakció) ---\n")
+print(anova(model_bias, type = 3))
+```
+
+```{r bias_vizualizacio_es_posthoc}
+
+# --- 1. POST-HOC ELEMZÉS (Opcionális, de ajánlott) ---
+# Kiszámoljuk a csoportok átlagos hibáját (Estimated Marginal Means)
+# Ez korrigált átlag, ami pontosabb, mint a sima mean()
+emm_results <- emmeans(model_bias, ~ group | ref_category)
+
+cat("--- Csoportok összehasonlítása ingerhosszonként (Post-hoc) ---\n")
+print(pairs(emm_results)) # Páronkénti összehasonlítás p-értékekkel
+
+# --- 2. VIZUALIZÁCIÓ: SZISZTEMATIKUS HIBA (BIAS) ---
+plot_data_bias <- lmm_data %>%
+  mutate(group_label = factor(group, 
+                              levels = c("sz_hr", "normal"), 
+                              labels = c("Skizotíp", "Kontrollcsoport")))
+ggplot(plot_data_bias, aes(x = ref_category, y = bias, fill = group_label)) +
+  geom_boxplot(outlier.alpha = 0.3, outlier.size = 1) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Szisztematikus Pontosság vizsgálata",
+    x = "Referencia Inger (Kategória)",
+    y = "Időészlelési Hiba (mp) [Válasz - Inger]",
+    fill = "Csoport"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    text = element_text(size = 12),
+    plot.title = element_text(face = "bold")
+  )
+```
+
+```{r lmm_h2}
+# Csomag a modell magyarázóerejének (R2) számításához
+if (!require("MuMIn")) install.packages("MuMIn")
+library(MuMIn)
+
+# --- 1. Regressziós Együtthatók (A predikció iránya és mértéke) ---
+# A summary() adja meg a részletes "Estimate" értékeket
+model_summary <- summary(model_bias)
+
+cat("--- A Skizotípia mint prediktor (Regressziós Együtthatók) ---\n")
+# Csak a fix hatásokat (Fixed effects) íratjuk ki, ezek a lényegesek most
+print(model_summary$coefficients)
+
+# --- 2. Értelmezési Segédlet (Konzolba kiírva) ---
+sz_hr_beta <- model_summary$coefficients["groupsz_hr", "Estimate"]
+sz_hr_p <- model_summary$coefficients["groupsz_hr", "Pr(>|t|)"]
+
+cat("\n--- ÉRTELMEZÉS ---\n")
+cat(paste0("A 'groupsz_hr' sor Estimate értéke (", round(sz_hr_beta, 4), ") mutatja a különbséget.\n"))
+if(sz_hr_p < 0.05) {
+  cat("Mivel p < 0.05, a hipotézis IGAZOLT: A skizotíp csoporttagság szignifikánsan előrejelzi a torzítást.\n")
+  if(sz_hr_beta > 0) {
+    cat("Az irány POZITÍV: A skizotíp csoport hajlamosabb a TÚLBECSLÉSRE a kontrollhoz képest.\n")
+  } else {
+    cat("Az irány NEGATÍV: A skizotíp csoport hajlamosabb az ALULBECSLÉSRE a kontrollhoz képest.\n")
+  }
+} else {
+  cat("A hipotézis NEM igazolt: Nincs szignifikáns prediktív kapcsolat.\n")
+}
+
+# --- 3. Modell Erejének Vizsgálata (R-négyzet) ---
+# A marginal R2 (R2m) mutatja a fix faktorok (Csoport, Ingerhossz) erejét
+# A conditional R2 (R2c) mutatja a teljes modell erejét (az egyéni különbségekkel együtt)
+r2_values <- r.squaredGLMM(model_bias)
+
+cat("\n--- Mennyire erős a modell? (R-négyzet) ---\n")
+print(r2_values)
+cat("R2m (Marginal): Ennyit magyaráz önmagában a csoport és az ingerhossz.\n")
+cat("R2c (Conditional): Ennyit magyaráz a modell, ha figyelembe vesszük az egyéni ingadozást is.\n")
+```
+
+```{r lmm_h3}
+
+# --- 1. ADATELŐKÉSZÍTÉS ---
+lmm_precision_data <- processed_data %>%
+  filter(group %in% c("normal", "sz_hr")) %>%
+  mutate(
+    prod_int = as.numeric(gsub(",", ".", as.character(prod_int))),
+    ref_ms = as.numeric(gsub(",", ".", as.character(ref_ms)))
+  ) %>%
+  # --- A LÉNYEG: Abszolút Hiba számítása ---
+  # Az abs() függvény leveszi a negatív előjelet.
+  mutate(abs_error = abs(prod_int - ref_ms)) %>%
+  mutate(group = factor(group, levels = c("normal", "sz_hr")))
+
+# --- 2. MODELL ÉPÍTÉS (LMM) ---
+model_precision <- lmer(abs_error ~ group * ref_category + (1 | ID), data = lmm_precision_data)
+
+# --- 3. EREDMÉNYEK (ANOVA) ---
+cat("--- Precizitás (Abszolút Hiba) ANOVA Táblázata ---\n")
+print(anova(model_precision, type = 3))
+
+# --- 4. POST-HOC Elemzés (Számszerűsítés) ---
+# Mennyi az átlagos abszolút hiba a csoportoknál?
+emm_precision_interaction <- emmeans(model_precision, ~ group | ref_category)
+cat("\n--- Átlagos Abszolút Hiba (becsült) Csoportonként ---\n")
+# Azt várjuk, hogy a sz_hr értéke magasabb lesz (nagyobb hiba = rosszabb precizitás)
+print(emm_precision)
+
+# --- 5. VIZUALIZÁCIÓ ---
+ggplot(lmm_precision_data, aes(x = ref_category, y = abs_error, fill = group)) +
+  geom_boxplot(outlier.alpha = 0.3) +
+  scale_fill_brewer(palette = "Set2") + 
+  labs(
+    title = "Precizitás vizsgálata",
+    x = "Referencia Inger",
+    y = "Abszolút Hiba (mp) |Válasz - Inger|",
+    fill = "Csoport"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    text = element_text(size = 12),
+    plot.title = element_text(face = "bold")
+  )
+```
+
+```{r intra_individual_variability_cv}
+# --- 1. ADATOK AGGREGÁLÁSA (CV számítása) ---
+# Most nem 'trial-level' (soronkénti), hanem 'subject-level' (személy szintű) adatbázist készítünk.
+
+iiv_data <- processed_data %>%
+  filter(group %in% c("normal", "sz_hr")) %>%
+  mutate(prod_int = as.numeric(gsub(",", ".", as.character(prod_int)))) %>%
+  
+  # Csoportosítás ID és Ingerkategória szerint
+  group_by(ID, group, ref_category) %>%
+  
+  # Kiszámoljuk a mutatókat:
+  # SD: Szórás (mennyire ingadozik másodpercben)
+  # Mean: Átlag (mennyit válaszolt átlagosan)
+  # CV: Variációs Együttható (SD / Mean) -> Ez a "relatív ingadozás"
+  summarise(
+    sd_prod = sd(prod_int, na.rm = TRUE),
+    mean_prod = mean(prod_int, na.rm = TRUE),
+    cv_prod = sd_prod / mean_prod, 
+    .groups = "drop" # A csoportosítást feloldjuk a végén
+  ) %>%
+  # Csoport sorrend beállítása
+  mutate(group = factor(group, levels = c("normal", "sz_hr")))
+
+# Ellenőrzés:
+# head(iiv_data)
+
+# --- 2. MODELL ÉPÍTÉS (LMM az aggregált adatokon) ---
+# Itt már kevesebb sorunk van (személyenként 3 db), de mivel
+# egy személytől több adat van (3 különböző időtartam), kell a random hatás (1|ID).
+
+# Hipotézis: A skizotíp csoport CV-je magasabb (nagyobb az ingadozás).
+model_cv <- lmer(cv_prod ~ group * ref_category + (1 | ID), data = iiv_data)
+
+# --- 3. EREDMÉNYEK ---
+cat("--- Egyéni Ingadozás (CV) ANOVA Táblázata ---\n")
+print(anova(model_cv, type = 3))
+
+# --- 4. POST-HOC és REGRESSZIÓS BECSLÉS ---
+# Mennyivel nagyobb az ingadozás a skizotíp csoportnál?
+cat("\n--- Mennyivel 'zajosabb' a skizotíp csoport? (Becslés) ---\n")
+print(summary(model_cv)$coefficients["groupsz_hr", ])
+
+# --- 5. VIZUALIZÁCIÓ ---
+ggplot(iiv_data, aes(x = ref_category, y = cv_prod, fill = group)) +
+  geom_boxplot(outlier.alpha = 0.5) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title = "Belső Ingadozás (Variációs Együttható - CV)",
+    subtitle = "Magasabb érték = Nagyobb bizonytalanság/zaj az észlelésben",
+    x = "Referencia Inger",
+    y = "Variációs Együttható (CV) [SD / Mean]",
+    fill = "Csoport"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    text = element_text(size = 12),
+    plot.title = element_text(face = "bold")
+  )
+```
+
+
+```{r pontabra_38_frame}
+# --- 1. ADATELŐKÉSZÍTÉS ---
+dotplot_data <- processed_data %>%
+  # Szűrés: Csak a 38-as frame (rövid) és a két csoport
+  filter(ref_frame <= 39) %>%
+  filter(group %in% c("normal", "sz_hr")) %>%
+  
+  # --- SORRENDEZÉS (A kulcslépés) ---
+  # 1. Először rendezzük az adatokat Csoport, majd ID szerint
+  arrange(group, ID) %>%
+  # 2. Rögzítjük az ID-k sorrendjét faktorként
+  # Így a ploton először a 'normal' ID-k jönnek, utána a 'sz_hr' ID-k
+  mutate(ID = factor(ID, levels = unique(ID))) %>%
+  
+  # Számok biztosítása
+  mutate(prod_int = as.numeric(gsub(",", ".", as.character(prod_int)))) %>%
+  
+  # Csoport nevek szépítése
+  mutate(group_label = factor(group, 
+                              levels = c("normal", "sz_hr"), 
+                              labels = c("Kontrollcsoport", "Skizotíp")))
+
+# --- 2. ÁBRÁZOLÁS ---
+ggplot(dotplot_data, aes(x = ID, y = prod_int, color = group_label)) +
+  # A pontok kirajzolása (kicsit áttetsző, hogy lássuk a sűrűsödést)
+  geom_point(alpha = 0.6, size = 2) +
+  
+  # Egy elválasztó vonal a két csoport közé
+  # (Megkeressük, hol vált a csoport, oda húzunk egy vonalat - ez manuálisabb, 
+  #  ezért egyszerűbb, ha a színek különítik el, de itt egy vizuális trükk:)
+  facet_grid(~group_label, scales = "free_x", space = "free") +
+  
+  scale_color_brewer(palette = "Set2") +
+  labs(
+    title = "Egyéni válaszok eloszlása (38 frame / Rövid inger)",
+    subtitle = "Minden pont egy konkrét választ jelöl",
+    x = "Vizsgálati Személyek (ID)",
+    y = "Reprodukált időtartam (mp)",
+    color = "Csoport"
+  ) +
+  theme_minimal() +
+  theme(
+    # Az X tengely feliratait elforgatjuk 90 fokkal, hogy olvashatóak legyenek
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8),
+    legend.position = "top"
+  )
+```
+
+```{r cv_teszt_38_frame}
+# Szükséges csomag a hatásnagysághoz (Cohen's d)
+if (!require("rstatix")) install.packages("rstatix")
+library(rstatix)
+
+# --- 1. ADATELŐKÉSZÍTÉS (CV számítása személyenként) ---
+cv_stats_38 <- processed_data %>%
+  # Csak a 38-as frame (Rövid) és a két csoport
+  filter(ref_category == "39 (Rövid)") %>%
+  filter(group %in% c("normal", "sz_hr")) %>%
+  
+  # "Nukleáris" tisztítás a csoportneveknél (hogy a t-próba ne akadjon el)
+  mutate(group = as.character(group)) %>%
+  mutate(group = factor(group, levels = c("normal", "sz_hr"))) %>% # Normal az 1., sz_hr a 2.
+  
+  # Számformátum biztosítása
+  mutate(prod_int = as.numeric(gsub(",", ".", as.character(prod_int)))) %>%
+  
+  # Kiszámoljuk a CV-t (SD / Mean) minden személyre
+  group_by(ID, group) %>%
+  summarise(
+    person_cv = sd(prod_int, na.rm = TRUE) / mean(prod_int, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(person_cv)) # Ha valakinek nincs adata, kivesszük
+
+# --- 2. STATISZTIKAI PRÓBA (Irányított t-próba) ---
+# H0: A két csoport átlagos CV-je egyenlő.
+# H1: A 'normal' csoport CV-je KISEBB, mint a 'sz_hr' csoporté.
+# (Mivel a levels-nél a 'normal' az első, az 'alternative = "less"' ezt teszteli)
+
+t_test_cv <- t.test(person_cv ~ group, data = cv_stats_38, alternative = "less")
+
+cat("--- Welch-féle t-próba eredménye (38 frame / CV) ---\n")
+print(t_test_cv)
+
+# --- 3. HATÁSNAGYSÁG (Cohen's d) ---
+# Ez mutatja meg, hogy MENNYIRE nagy a különbség (nem csak azt, hogy szignifikáns-e)
+effect_size <- cv_stats_38 %>% 
+  cohens_d(person_cv ~ group)
+
+cat("\n--- Hatásnagyság (Cohen's d) ---\n")
+print(effect_size)
+
+# --- 4. LEÍRÓ ADATOK (Átlagok) ---
+group_stats <- cv_stats_38 %>%
+  group_by(group) %>%
+  summarise(
+    Atlagos_CV = mean(person_cv),
+    N = n()
+  )
+cat("\n--- Csoportátlagok ---\n")
+print(group_stats)
+```
+
+
+
+
+
+
