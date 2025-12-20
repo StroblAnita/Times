@@ -331,7 +331,7 @@ print(summary(model_cv)$coefficients["groupsz_hr", ])
 # --- 5. VIZUALIZÁCIÓ ---
 ggplot(iiv_data, aes(x = ref_category, y = cv_prod, fill = group)) +
   geom_boxplot(outlier.alpha = 0.5) +
-  scale_fill_brewer(palette = "Set1") +
+  scale_fill_brewer(palette = "Set2") +
   labs(
     title = "Belső Ingadozás (Variációs Együttható - CV)",
     subtitle = "Magasabb érték = Nagyobb bizonytalanság/zaj az észlelésben",
@@ -341,7 +341,7 @@ ggplot(iiv_data, aes(x = ref_category, y = cv_prod, fill = group)) +
   ) +
   theme_minimal() +
   theme(
-    legend.position = "top",
+    legend.position = "right",
     text = element_text(size = 12),
     plot.title = element_text(face = "bold")
   )
@@ -396,63 +396,190 @@ ggplot(dotplot_data, aes(x = ID, y = prod_int, color = group_label)) +
   )
 ```
 
-```{r cv_teszt_38_frame}
-# Szükséges csomag a hatásnagysághoz (Cohen's d)
+```{r cv_teszt_38_frame_stabil}
+# Csomag betöltése
 if (!require("rstatix")) install.packages("rstatix")
 library(rstatix)
 
-# --- 1. ADATELŐKÉSZÍTÉS (CV számítása személyenként) ---
+# --- 1. ADATELŐKÉSZÍTÉS ---
 cv_stats_38 <- processed_data %>%
-  # Csak a 38-as frame (Rövid) és a két csoport
-  filter(ref_category == "39 (Rövid)") %>%
+  # BIZTONSÁGOS SZŰRÉS:
+  # Nem a nevet ("Rövid") keressük, hanem a konkrét frame számokat (38, 39).
+  # Ez kikerüli az ékezetes betűk (ö) okozta hibákat.
+  filter(ref_frame %in% c(38, 39)) %>%
   filter(group %in% c("normal", "sz_hr")) %>%
   
-  # "Nukleáris" tisztítás a csoportneveknél (hogy a t-próba ne akadjon el)
+  # Csoportnevek tisztítása (Biztosítjuk, hogy csak 2 csoport legyen)
   mutate(group = as.character(group)) %>%
-  mutate(group = factor(group, levels = c("normal", "sz_hr"))) %>% # Normal az 1., sz_hr a 2.
+  mutate(group = factor(group, levels = c("normal", "sz_hr"))) %>%
   
-  # Számformátum biztosítása
+  # Számformátum
   mutate(prod_int = as.numeric(gsub(",", ".", as.character(prod_int)))) %>%
   
-  # Kiszámoljuk a CV-t (SD / Mean) minden személyre
+  # CV számítása
   group_by(ID, group) %>%
   summarise(
     person_cv = sd(prod_int, na.rm = TRUE) / mean(prod_int, na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  filter(!is.na(person_cv)) # Ha valakinek nincs adata, kivesszük
+  filter(!is.na(person_cv)) %>%
+  # Kiszűrjük, ha valakinek 0 vagy végtelen lett a CV-je (pl. csak 1 mérése volt)
+  filter(is.finite(person_cv))
 
-# --- 2. STATISZTIKAI PRÓBA (Irányított t-próba) ---
-# H0: A két csoport átlagos CV-je egyenlő.
-# H1: A 'normal' csoport CV-je KISEBB, mint a 'sz_hr' csoporté.
-# (Mivel a levels-nél a 'normal' az első, az 'alternative = "less"' ezt teszteli)
+# --- 2. DIAGNOSZTIKA (Hibaellenőrzés) ---
+cat("--- ELLENŐRZÉS: Csoportlétszámok a tisztítás után ---\n")
+letszam <- table(cv_stats_38$group)
+print(letszam)
 
-t_test_cv <- t.test(person_cv ~ group, data = cv_stats_38, alternative = "less")
+# --- 3. STATISZTIKAI TESZT ---
+# Csak akkor futtatjuk, ha mindkét csoportban van adat
+if(length(letszam) == 2 && all(letszam > 1)) {
+  
+  # Welch t-próba (irányított: normal < sz_hr)
+  t_test_cv <- t.test(person_cv ~ group, data = cv_stats_38, alternative = "less")
+  
+  cat("\n--- Welch-féle t-próba eredménye (CV különbség) ---\n")
+  print(t_test_cv)
+  
+  # Hatásnagyság (Cohen's d)
+  cat("\n--- Hatásnagyság (Cohen's d) ---\n")
+  tryCatch({
+    eff <- cv_stats_38 %>% cohens_d(person_cv ~ group)
+    print(eff)
+  }, error = function(e) { cat("A hatásnagyság számítása közben hiba lépett fel, de a t-próba érvényes.\n")})
 
-cat("--- Welch-féle t-próba eredménye (38 frame / CV) ---\n")
-print(t_test_cv)
-
-# --- 3. HATÁSNAGYSÁG (Cohen's d) ---
-# Ez mutatja meg, hogy MENNYIRE nagy a különbség (nem csak azt, hogy szignifikáns-e)
-effect_size <- cv_stats_38 %>% 
-  cohens_d(person_cv ~ group)
-
-cat("\n--- Hatásnagyság (Cohen's d) ---\n")
-print(effect_size)
-
-# --- 4. LEÍRÓ ADATOK (Átlagok) ---
-group_stats <- cv_stats_38 %>%
-  group_by(group) %>%
-  summarise(
-    Atlagos_CV = mean(person_cv),
-    N = n()
-  )
-cat("\n--- Csoportátlagok ---\n")
-print(group_stats)
+  # Átlagok
+  cat("\n--- Csoportátlagok (CV) ---\n")
+  print(cv_stats_38 %>% group_by(group) %>% summarise(Atlag_CV = mean(person_cv), N = n()))
+  
+} else {
+  cat("\n!!! HIBA !!!\n")
+  cat("Az egyik csoport üres maradt a szűrés után.\n")
+  cat("Kérlek ellenőrizd, hogy a 'ref_frame' oszlopban tényleg szerepelnek-e a 38-as vagy 39-es értékek,\n")
+  cat("és hogy a 'group' oszlopban helyesek-e a nevek (normal, sz_hr).")
+}
 ```
 
+```{r lmm_precizitas_predikcio}
+# Csomagok
+if (!require("lmerTest")) install.packages("lmerTest")
+if (!require("MuMIn")) install.packages("MuMIn")
+library(lmerTest)
+library(MuMIn)
 
+# --- 1. ADATELŐKÉSZÍTÉS ---
+# Biztosítjuk, hogy az abszolút hiba (precizitás hiánya) helyesen legyen kiszámolva
+pred_precision_data <- processed_data %>%
+  filter(group %in% c("normal", "sz_hr")) %>%
+  mutate(
+    prod_int = as.numeric(gsub(",", ".", as.character(prod_int))),
+    ref_ms = as.numeric(gsub(",", ".", as.character(ref_ms)))
+  ) %>%
+  # Abszolút hiba = Mennyire tér el a válasz az ingertől (iránytól függetlenül)
+  mutate(abs_error = abs(prod_int - ref_ms)) %>%
+  # Referencia beállítása: A bázis a 'normal' csoport és a 'Rövid' inger
+  mutate(group = factor(group, levels = c("normal", "sz_hr")))
 
+# --- 2. MODELL ÉPÍTÉS (Predikció) ---
+# Kérdés: A csoporttagság előrejelzi-e a hiba növekedését?
+# Formula: Abszolút Hiba ~ Csoport * Ingerhossz + (1 | ID)
+model_prec_pred <- lmer(abs_error ~ group * ref_category + (1 | ID), data = pred_precision_data)
 
+# --- 3. EREDMÉNYEK: REGRESSZIÓS EGYÜTTHATÓK ---
+# Ez a tábla mutatja meg az előrejelzés irányát és erejét
+model_summary_prec <- summary(model_prec_pred)
 
+cat("--- Regressziós Együtthatók (Prediction Coefficients) ---\n")
+# Csak a fix hatásokat kérjük le (az Intercept, a Csoport és az Ingerhossz hatását)
+print(model_summary_prec$coefficients)
 
+# --- 4. RÉSZLETES ÉRTELMEZÉS (Automata kiíratás) ---
+beta_sz <- model_summary_prec$coefficients["groupsz_hr", "Estimate"]
+p_val_sz <- model_summary_prec$coefficients["groupsz_hr", "Pr(>|t|)"]
+
+cat("\n--- A HIPOTÉZIS ÉRTÉKELÉSE ---\n")
+cat(paste0("A 'groupsz_hr' becsült hatása (Estimate): ", round(beta_sz, 4), "\n"))
+
+if (p_val_sz < 0.05) {
+  cat("A csoporttagság SZIGNIFIKÁNSAN előrejelzi a precizitást (p < 0.05).\n")
+  if (beta_sz > 0) {
+    cat("IRÁNY: POZITÍV -> A skizotíp csoporttagság NÖVELI az abszolút hibát (rontja a precizitást).\n")
+    cat("Konklúzió: A hipotézis IGAZOLT.\n")
+  } else {
+    cat("IRÁNY: NEGATÍV -> A skizotíp csoporttagság CSÖKKENTI a hibát (javítja a precizitást).\n")
+  }
+} else {
+  cat("Nem találtunk szignifikáns főhatást (p > 0.05), a csoporttagság önmagában nem jelzi előre a precizitást.\n")
+  cat("(Érdemes megnézni az interakciókat is a fenti táblázatban!)\n")
+}
+
+# --- 5. MODELL MAGYARÁZÓEREJE ---
+cat("\n--- Mennyire erős a modell? (R-squared) ---\n")
+print(r.squaredGLMM(model_prec_pred))
+```
+
+```{r lmm_cv_predikcio}
+# Csomagok betöltése
+library(lmerTest)
+library(MuMIn)
+library(tidyverse)
+
+# --- 1. ADATELŐKÉSZÍTÉS (CV számítása) ---
+# Aggregáljuk az adatokat: Minden ID-hoz és Ingerhosszhoz kiszámoljuk a CV-t
+cv_pred_data <- processed_data %>%
+  filter(group %in% c("normal", "sz_hr")) %>%
+  mutate(
+    prod_int = as.numeric(gsub(",", ".", as.character(prod_int)))
+  ) %>%
+  # Csoportosítás
+  group_by(ID, group, ref_category) %>%
+  summarise(
+    sd_val = sd(prod_int, na.rm = TRUE),
+    mean_val = mean(prod_int, na.rm = TRUE),
+    cv_value = sd_val / mean_val, # Ez a Variációs Együttható
+    .groups = "drop"
+  ) %>%
+  # Referencia beállítása (Normal csoport legyen a bázis)
+  mutate(group = factor(group, levels = c("normal", "sz_hr"))) %>%
+  # Hibás adatok (pl. 0 szórás) szűrése
+  filter(is.finite(cv_value))
+
+# --- 2. MODELL ÉPÍTÉS (Predikció) ---
+# Kérdés: A csoporttagság előrejelzi-e a CV növekedését?
+# Formula: CV ~ Csoport * Ingerhossz + (1 | ID)
+model_cv_pred <- lmer(cv_value ~ group * ref_category + (1 | ID), data = cv_pred_data)
+
+# --- 3. EREDMÉNYEK: REGRESSZIÓS EGYÜTTHATÓK ---
+summary_cv <- summary(model_cv_pred)
+
+cat("--- Regressziós Együtthatók (CV Predikció) ---\n")
+# A táblázatban a 'Estimate' oszlop mutatja az előrejelzés erejét
+print(summary_cv$coefficients)
+
+# --- 4. ÉRTELMEZÉS (Automata) ---
+beta_cv <- summary_cv$coefficients["groupsz_hr", "Estimate"]
+p_val_cv <- summary_cv$coefficients["groupsz_hr", "Pr(>|t|)"]
+
+cat("\n--- A HIPOTÉZIS ÉRTÉKELÉSE (CV) ---\n")
+cat(paste0("A 'groupsz_hr' becsült hatása (Estimate): ", round(beta_cv, 4), "\n"))
+
+if (p_val_cv < 0.05) {
+  cat("EREDMÉNY: Szignifikáns predikció (p < 0.05).\n")
+  if (beta_cv > 0) {
+    cat("IRÁNY: A skizotíp csoporttagság NÖVELI a variációs együtthatót (zajosabb belső óra).\n")
+    cat("A hipotézis IGAZOLT: A skizotípia előrejelzi az ingadozás zavarát.\n")
+  } else {
+    cat("IRÁNY: A skizotíp csoporttagság CSÖKKENTI a variációs együtthatót (stabilabb működés).\n")
+  }
+} else if (p_val_cv < 0.1) {
+    cat("EREDMÉNY: Trendszintű (marginális) hatás (0.05 < p < 0.1).\n")
+    cat("A csoporttagság tendenciájában jelzi előre a zavart, de nem éri el a szignifikancia küszöbét.\n")
+} else {
+  cat("EREDMÉNY: Nem szignifikáns (p > 0.05).\n")
+  cat("A csoporttagság nem jelzi előre megbízhatóan a CV értékét a teljes modellen nézve.\n")
+}
+
+# --- 5. MODELL MAGYARÁZÓEREJE ---
+cat("\n--- Modell Magyarázóereje (R-négyzet) ---\n")
+print(r.squaredGLMM(model_cv_pred))
+```
