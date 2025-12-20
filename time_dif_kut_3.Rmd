@@ -1,0 +1,30 @@
+---
+title: "time_dif_kut_3"
+author: "Stróbl Anita"
+date: "2025-12-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r adat_beolvasas_es_elokeszites}
+# Csomagok betöltése
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("readxl")) install.packages("readxl")
+
+library(tidyverse)
+library(readxl)
+
+# --- ADATBEOLVASÁS ---
+# Kérlek, aktiváld (vedd ki a # jelet) a megfelelő fájlformátumhoz tartozó sor elől.
+
+# 1. Opció: Ha CSV fájl (feltételezve, hogy pontosvessző vagy vessző az elválasztó)
+# raw_data <- read_csv("RE_E_merge_1_87.csv") 
+
+# 2. Opció: Ha Excel fájl
+raw_data <- read_excel("RE_E_merge_1_87.xlsx")
+
+# Ellenőrzés: az első pár sor kiírása
+head(raw_data)
