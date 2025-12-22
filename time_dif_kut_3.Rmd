@@ -202,6 +202,7 @@ library(MuMIn)
 
 # --- 1. Regressziós Együtthatók (A predikció iránya és mértéke) ---
 # A summary() adja meg a részletes "Estimate" értékeket
+model_bias_group <- lmer(bias ~ group * ref_category + (1 | ID), data = lmm_data)
 model_summary <- summary(model_bias)
 
 cat("--- A Skizotípia mint prediktor (Regressziós Együtthatók) ---\n")
@@ -234,6 +235,44 @@ cat("\n--- Mennyire erős a modell? (R-négyzet) ---\n")
 print(r2_values)
 cat("R2m (Marginal): Ennyit magyaráz önmagában a csoport és az ingerhossz.\n")
 cat("R2c (Conditional): Ennyit magyaráz a modell, ha figyelembe vesszük az egyéni ingadozást is.\n")
+```
+
+```{r lmm_h2_accuracy_simple}
+library(lmerTest)
+library(MuMIn)
+
+# --- 1. MODELL ÉPÍTÉS (Egyszerűsített) ---
+# Formula: Bias ~ Csoport + (Egyéni véletlen hatás)
+# Nincs benne az ingerhossz (ref_category), csak a csoport!
+model_bias_simple <- lmer(bias ~ group + (1 | ID), data = lmm_data)
+
+# --- 2. EREDMÉNYEK ---
+model_summary <- summary(model_bias_simple)
+
+cat("--- Regressziós Együtthatók (Csak Csoporttagság) ---\n")
+print(model_summary$coefficients)
+
+# --- 3. ÉRTELMEZÉS ---
+sz_hr_beta <- model_summary$coefficients["groupsz_hr", "Estimate"]
+sz_hr_p <- model_summary$coefficients["groupsz_hr", "Pr(>|t|)"]
+
+cat("\n--- A HIPOTÉZIS ÉRTÉKELÉSE (Bias Főhatás) ---\n")
+cat(paste0("A 'groupsz_hr' becsült hatása: ", round(sz_hr_beta, 4), "\n"))
+
+if(sz_hr_p < 0.05) {
+  cat("IGAZOLT: A skizotíp csoporttagság szignifikánsan előrejelzi a torzítást.\n")
+  if(sz_hr_beta > 0) {
+    cat("IRÁNY: A skizotípok átlagosan TÚLBECSLIK az időt a kontrollhoz képest.\n")
+  } else {
+    cat("IRÁNY: A skizotípok átlagosan ALULBECSLIK az időt a kontrollhoz képest.\n")
+  }
+} else {
+  cat("NEM IGAZOLT: Nincs szignifikáns különbség a két csoport átlagos torzítása között.\n")
+}
+
+# --- 4. MODELL EREJE ---
+cat("\n--- Modell Magyarázóereje (R2) ---\n")
+print(r.squaredGLMM(model_bias_simple))
 ```
 
 ```{r h3_intra_individual_variability_cv}
@@ -405,6 +444,60 @@ if (p_val_cv < 0.05) {
 # --- 5. MODELL MAGYARÁZÓEREJE ---
 cat("\n--- Modell Magyarázóereje (R-négyzet) ---\n")
 print(r.squaredGLMM(model_cv_pred))
+```
+
+```{r lmm_h4_cv_predikcio_simple}
+
+library(lmerTest)
+library(MuMIn)
+library(tidyverse)
+
+# --- 1. ADATELŐKÉSZÍTÉS (CV számítása - Ugyanaz, mint eddig) ---
+cv_pred_data <- processed_data %>%
+  filter(group %in% c("normal", "sz_hr")) %>%
+  mutate(prod_int = as.numeric(gsub(",", ".", as.character(prod_int)))) %>%
+  group_by(ID, group, ref_category) %>%
+  summarise(
+    sd_val = sd(prod_int, na.rm = TRUE),
+    mean_val = mean(prod_int, na.rm = TRUE),
+    cv_value = sd_val / mean_val, 
+    .groups = "drop"
+  ) %>%
+  mutate(group = factor(group, levels = c("normal", "sz_hr"))) %>%
+  filter(is.finite(cv_value))
+
+# --- 2. MODELL ÉPÍTÉS (Egyszerűsített) ---
+# Formula: CV ~ Csoport + (Egyéni véletlen hatás)
+# Kivettük a 'ref_category'-t és az interakciót (*)
+model_cv_simple <- lmer(cv_value ~ group + (1 | ID), data = cv_pred_data)
+
+# --- 3. EREDMÉNYEK ---
+summary_cv <- summary(model_cv_simple)
+
+cat("--- Regressziós Együtthatók (CV - Csak Csoporttagság) ---\n")
+print(summary_cv$coefficients)
+
+# --- 4. ÉRTELMEZÉS ---
+beta_cv <- summary_cv$coefficients["groupsz_hr", "Estimate"]
+p_val_cv <- summary_cv$coefficients["groupsz_hr", "Pr(>|t|)"]
+
+cat("\n--- A HIPOTÉZIS ÉRTÉKELÉSE (CV Főhatás) ---\n")
+cat(paste0("A 'groupsz_hr' becsült hatása: ", round(beta_cv, 4), "\n"))
+
+if (p_val_cv < 0.05) {
+  cat("EREDMÉNY: Szignifikáns! A csoporttagság előrejelzi a belső ingadozást.\n")
+  if (beta_cv > 0) {
+    cat("IRÁNY: A skizotíp csoport általános ingadozása (CV) NAGYOBB.\n")
+  } else {
+    cat("IRÁNY: A skizotíp csoport általános ingadozása (CV) KISEBB.\n")
+  }
+} else {
+  cat("EREDMÉNY: Nem szignifikáns. A csoporttagság önmagában nem magyarázza a CV eltérését.\n")
+}
+
+# --- 5. MODELL EREJE ---
+cat("\n--- Modell Magyarázóereje (R2) ---\n")
+print(r.squaredGLMM(model_cv_simple))
 ```
 
 ```{r pontabra_38_frame}
