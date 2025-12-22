@@ -350,13 +350,11 @@ library(MuMIn)
 library(tidyverse)
 
 # --- 1. ADATELŐKÉSZÍTÉS (CV számítása) ---
-# Aggregáljuk az adatokat: Minden ID-hoz és Ingerhosszhoz kiszámoljuk a CV-t
 cv_pred_data <- processed_data %>%
   filter(group %in% c("normal", "sz_hr")) %>%
   mutate(
     prod_int = as.numeric(gsub(",", ".", as.character(prod_int)))
   ) %>%
-  # Csoportosítás
   group_by(ID, group, ref_category) %>%
   summarise(
     sd_val = sd(prod_int, na.rm = TRUE),
