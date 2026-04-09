@@ -1,0 +1,30 @@
+---
+title: "02_lmer_variablity"
+author: "Stróbl Anita"
+date: "2026-04-09"
+output: html_document
+---
+
+``` {r packages, message = FALSE}
+
+library(tidyverse)
+library(psych) 
+library(rstatix)
+library(lme4)        
+library(lmerTest)    
+library(performance) 
+library(sjPlot) 
+library(MuMIn)
+library(ggplot2)
+library(readxl)
+library(gtsummary)
+library(flextable)
+library(writexl)
+
+```
+
+``` {r import database}
+
+dat <- read_csv("databases/dat_processed.csv")
+
+```
