@@ -81,12 +81,12 @@ table_dem <- dat_dem %>%
 table_dem
 
 # Táblázat átalakítása és mentése
-table_dem %>%
-  as_flex_table() %>%                              
-  save_as_docx(path = "tables/dem_table.docx")  
-table_dem %>%
-  as_tibble() %>%                                  
-  write_xlsx(path = "tables/dem_table.xlsx")      
+# table_dem %>%
+  # as_flex_table() %>%                              
+  # save_as_docx(path = "tables/dem_table.docx")  
+# table_dem %>%
+  # as_tibble() %>%                                  
+  # write_xlsx(path = "tables/dem_table.xlsx")      
 
 ```
 
@@ -124,5 +124,49 @@ table_descr <- dat_descr %>%
 
 # save_as_docx(table_descr, path = "tables/descr_table.docx")
 # write_xlsx(dat_descr, path = "tables/descr_table.xlsx")
+
+```
+
+``` {r descr visualization}
+
+dat_plot_descr <- dat %>%
+  group_by(ID, group, ref_category) %>% 
+  summarise(prod_mean = mean(prod_int, na.rm = TRUE)) %>%
+  ungroup()
+  
+colors <- c("Magas szkizofrénia-kockázat" = "#66C2A5",
+            "Magas bipoláris zavar kockázat" = "#80B1D3",
+            "Kontrollcsoport" = "#FC8D62FF") 
+
+plot_bp_descr <- ggplot(dat_plot_descr, aes(x = ref_category, y = prod_mean, fill = group)) +
+  geom_hline(yintercept = c(0.65, 1.35, 1.85), 
+             color = "darkgrey", 
+             linetype = "dashed", 
+             linewidth = 0.8) +
+  geom_boxplot(outlier.color = "grey30", outlier.shape = 16, outlier.size = 1.5,
+               alpha = 0.9) +
+  scale_fill_manual(name = "Vizsgálati csoport",
+                    labels = c("Magas szkizofrénia-kockázat", 
+                               "Magas bipoláris zavar kockázat",
+                               "Kontrollcsoport"),
+                    values = colors) + 
+  labs(
+    title = "Reprodukált időtartamok a csoportonként",
+    x = "Referencia inger",
+    y = "Reprodukált idő",
+    fill = "Vizsgálati csoport") +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14),
+    legend.key.size = unit(1, "cm"),
+    plot.title = element_text(face = "bold", size = 16),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12))
+
+print(plot_bp_descr)
+
+ggsave("plots/plot_bp_descr.png", plot = plot_bp_descr, width = 30, height = 15, units = "cm", dpi = 300)
 
 ```
