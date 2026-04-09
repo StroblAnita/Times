@@ -1,0 +1,128 @@
+---
+title: "01_time_desc"
+author: "Stróbl Anita"
+date: "2026-04-09"
+output: html_document
+---
+
+``` {r import database, message = FALSE}
+
+library(tidyverse)
+library(psych) 
+library(rstatix)
+library(lme4)        
+library(lmerTest)    
+library(performance) 
+library(sjPlot) 
+library(MuMIn)
+library(ggplot2)
+library(readxl)
+library(gtsummary)
+library(flextable)
+library(writexl)
+
+```
+
+``` {r import database}
+
+dat_raw <- read_excel("RE_E_merge_1_87.xlsx")
+
+```
+
+``` {r process database}
+
+dat <- dat_raw %>%
+  mutate(prod_int = as.numeric(prod_int)) %>% 
+  mutate(
+    ref_category = case_when(
+      ref_frame %in% c(38, 39) ~ "0,65 mp (rövid)",
+      ref_frame %in% c(80, 81, 82) ~  "1,35 mp (közepes)",
+      ref_frame %in% c(109, 110, 111, 112) ~ "1,85 mp (hosszú)",
+      TRUE ~ NA_character_)) %>%
+  filter(!is.na(ref_category)) %>% 
+  mutate(ref_category = factor(ref_category, 
+                               levels = c("0,65 mp (rövid)", 
+                                          "1,35 mp (közepes)", 
+                                          "1,85 mp (hosszú)"))) %>%
+  mutate(sex = factor(sex, 
+                      levels = c("female", "male"), 
+                      labels = c("Nő", "Férfi"))) %>%
+  mutate(group = factor(group, 
+                        levels = c("sz_hr", "bp_hr", "normal"), 
+                        labels = c("Magas szkizofrénia-kockázat", 
+                                   "Magas bipoláris zavar kockázat", 
+                                   "Kontrollcsoport")))
+
+# write_csv(dat, "databases/dat_processed.csv")
+
+```
+
+``` {r demography}
+
+# library(gtsummary)
+# library(flextable)
+# library(writexl)
+
+# 1. Egyedi személyek kinyerése
+dat_dem <- dat %>%
+  distinct(ID, .keep_all = TRUE) %>% 
+  select(group, sex) 
+
+# 2. Táblázat generálása a gtsummary csomaggal
+table_dem <- dat_dem %>%
+  tbl_summary(
+    by = group, # Ez bontja szét az oszlopokat a három csoportodra
+    label = list(sex ~ "Nem")) %>%
+  add_overall(col_label = "**Létszám**") %>% 
+  modify_header(label = "") %>%
+  bold_labels() 
+
+# Táblázat megjelenítése
+table_dem
+
+# Táblázat átalakítása és mentése
+table_dem %>%
+  as_flex_table() %>%                              
+  save_as_docx(path = "tables/dem_table.docx")  
+table_dem %>%
+  as_tibble() %>%                                  
+  write_xlsx(path = "tables/dem_table.xlsx")      
+
+```
+
+``` {r descripives}
+
+# 1. A leíró statisztikák kiszámolása
+dat_descr <- dat %>%
+  group_by(ID, group, ref_category) %>% 
+  summarise(prod_mean = mean(prod_int, na.rm = TRUE)) %>%
+  ungroup() %>%
+  group_by(group, ref_category) %>%
+  summarise(
+    N = n(),                                         
+    Mean = mean(prod_mean, na.rm = TRUE),             
+    SD = sd(prod_mean, na.rm = TRUE),                 
+    SE = SD / sqrt(N)) %>%                             
+  ungroup() %>%
+  mutate(across(c(Mean, SD, SE), ~ round(.x, 2)))
+
+print(dat_descr)
+
+# 2. Táblázat formázása és mentése
+table_descr <- dat_descr %>%
+  flextable() %>%
+  set_header_labels(
+    group = "Csoport",
+    ref_category = "Referencia idő",
+    N = "Esetszám (N)",
+    Mean = "Átlag (mp)",
+    SD = "Szórás (SD)",
+    SE = "Stand. hiba (SE)") %>%
+  theme_vanilla() %>%     
+  autofit() %>%           
+  bold(part = "header")   
+
+# save_as_docx(table_descr, path = "tables/descr_table.docx")
+# write_xlsx(dat_descr, path = "tables/descr_table.xlsx")
+
+```
