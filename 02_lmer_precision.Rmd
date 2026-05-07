@@ -41,7 +41,8 @@ dat_lmer <- dat %>%
   group_by(ID, ref_category) %>% 
   mutate(
     prod_between = mean(prod_int, na.rm = TRUE),
-    prod_within = abs(prod_int - prod_between) / ref_ms) %>%
+    prod_within = abs(prod_int - prod_between) / ref_ms,
+    prod_precision = abs(prod_int - prod_between) / prod_int)%>%
   ungroup() %>%
   mutate(group = relevel(factor(group), ref = "Kontrollcsoport")) 
 
@@ -93,7 +94,7 @@ plot_lmer_precision <- plot_model(mv,
            line.size = 1,
            color = color) +
   theme_minimal() +
-  labs(title = "Pontosság",
+  labs(title = "Precizitás (precision)",
        y = "Hiba mértéke",
        x = "Időtartam kondíciók",
        color = "Csoport")
@@ -102,13 +103,48 @@ print(plot_lmer_precision)
 
 ggsave("plots/plot_lmer_precision.png", plot = plot_lmer_precision, height = 12, width = 20, units = "cm", dpi = 300)
 
-# VAGY a legprofibb módszer emmeans-szel:
-# Ez a modell becsült értékeit használja
+# eff size
 eff_size_em <- eff_size(emmeans_mv, method = "identity", edf = Inf, sigma = sigma(mv))
 
 summary(eff_size_em)
 
 ```
+``` {r lmer precision all in one}
+
+# library(emmeans)
+
+color <- c("#66C2A5", "#FC8D62", "#BC80BD")
+
+mp <- lmer(prod_precision ~ group * ref_category + (1 | ID), data = dat_lmer)
+
+anova(mp)
+
+emmeans_mp <- emmeans(mp, pairwise ~ group | ref_category)
+summary(emmeans_mp)
+
+plot_lmer_mp <- plot_model(mp, 
+           type = "pred", 
+           terms = c("ref_category", "group"), 
+           dot.size = 3,
+           line.size = 1,
+           color = color) +
+  theme_minimal() +
+  labs(title = "Precizitás (precision)",
+       y = "Hiba mértéke",
+       x = "Időtartam kondíciók",
+       color = "Csoport")
+
+print(plot_lmer_mp)
+
+ggsave("plots/plot_lmer_mp.png", plot = plot_lmer_mp, height = 12, width = 20, units = "cm", dpi = 300)
+
+# eff size
+eff_size_mp <- eff_size(emmeans_mp, method = "identity", edf = Inf, sigma = sigma(mv))
+
+summary(eff_size_mp)
+
+```
+
 
 ``` {r}
 
@@ -176,7 +212,7 @@ print(cv_posthoc)
 
 ```
 
-```{r cv visualization like sjPlot}
+```{r cv visualization}
 
 # 1. Színpaletta rögzítése a konzisztencia érdekében
 cv_colors <- c("Kontrollcsoport" = "#66C2A5", 
@@ -196,7 +232,7 @@ plot_cv_precision <- ggplot(dat_cv, aes(x = ref_category, y = cv, color = group,
                position = position_dodge(0.4)) +
     scale_color_manual(values = cv_colors) +
     theme_minimal() +
-  labs(title = "Precizitás",
+  labs(title = "Precizitás (precision)",
        y = "Variációs Koefficiens (CV)",
        x = "Időtartam kondíciók",
        color = "Csoport") 

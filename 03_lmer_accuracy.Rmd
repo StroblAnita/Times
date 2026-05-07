@@ -1,0 +1,254 @@
+---
+title: "03_lmer_accuracy"
+author: "Stróbl Anita"
+date: "2026-05-07"
+output: html_document
+---
+
+``` {r packages, message = FALSE}
+
+library(tidyverse)
+library(psych) 
+library(rstatix)
+library(lme4)        
+library(lmerTest) 
+library(lmeresampler)
+library(performance) 
+library(sjPlot)
+library(emmeans)
+library(MuMIn)
+library(ggplot2)
+library(readxl)
+library(gtsummary)
+library(flextable)
+library(writexl)
+library(effsize)
+
+```
+
+``` {r import database, message = FALSE}
+
+dat <- read_csv("databases/dat_processed.csv")
+
+```
+
+``` {r lmer se dat}
+
+dat_acc <- dat %>%
+  mutate(
+    ref_ms = as.numeric(ref_ms),
+    prod_int = as.numeric(prod_int)) %>%
+  group_by(ID, ref_category) %>% 
+  mutate(
+    acc_error = (prod_int - ref_ms) / ref_ms,
+    accuracy = (prod_int - ref_ms) / prod_int,
+    ce = mean(acc_error, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(group = relevel(factor(group), ref = "Kontrollcsoport"))
+
+```
+
+``` {r check}
+
+normality_acc <- dat_acc %>%
+  group_by(ref_category, group) %>%
+  shapiro_test(acc_error)
+
+homogeneity_acc <- dat_acc %>%
+  group_by(ref_category) %>%
+  levene_test(acc_error ~ group)
+
+outliers_acc <- dat_acc %>%
+  group_by(ref_category, group) %>%
+  identify_outliers(acc_error)
+
+# Eredmények megjelenítése
+print("--- NORMALITÁS: ACCURACY (Shapiro-Wilk) ---")
+print(normality_acc)
+
+print("--- SZÓRÁS-HOMOGENITÁS: ACCURACY (Levene-teszt) ---")
+print(homogeneity_acc)
+
+```
+
+``` {r lmer accuracy}
+
+# 1. A modell illesztése
+mv_acc <- lmer(acc_error ~ group * ref_category + (1 | ID), data = dat_acc)
+
+# 2. Omnibus teszt (Típus III ANOVA)
+anova_acc <- anova(mv_acc)
+print(anova_acc)
+
+# 3. Post-hoc páros összehasonlítások
+emmeans_acc <- emmeans(mv_acc, pairwise ~ group | ref_category)
+summary(emmeans_acc)
+
+# 4. Vizualizáció (Prediktált értékek)
+color_acc <- c("#66C2A5", "#FC8D62", "#BC80BD")
+
+plot_lmer_accuracy <- plot_model(mv_acc, 
+                           type = "pred", 
+                           terms = c("ref_category", "group"), 
+                           dot.size = 3,
+                           line.size = 1,
+                           color = color_acc) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", alpha = 0.5) + 
+  theme_minimal() +
+  labs(title = "Szisztematikus pontosság (Accuracy)",
+       y = "Irányított hiba (Relatív)",
+       x = "Időtartam kondíciók",
+       color = "Csoport")
+
+print(plot_lmer_accuracy)
+
+ggsave("plots/plot_lmer_accuracy.png", plot = plot_lmer_accuracy, height = 12, width = 20, units = "cm", dpi = 300)
+
+```
+
+``` {r lmer accuracy}
+
+# 1. A modell illesztése
+ma <- lmer(accuracy ~ group * ref_category + (1 | ID), data = dat_acc)
+
+# 2. Omnibus teszt (Típus III ANOVA)
+anova_ma <- anova(ma)
+print(anova_ma)
+
+# 3. Post-hoc páros összehasonlítások
+emmeans_ma <- emmeans(ma, pairwise ~ group | ref_category)
+summary(emmeans_ma)
+
+# 4. Vizualizáció (Prediktált értékek)
+color_acc <- c("#66C2A5", "#FC8D62", "#BC80BD")
+
+plot_lmer_ma <- plot_model(ma, 
+                           type = "pred", 
+                           terms = c("ref_category", "group"), 
+                           dot.size = 3,
+                           line.size = 1,
+                           color = color_acc) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", alpha = 0.5) + 
+  theme_minimal() +
+  labs(title = "Szisztematikus pontosság (Accuracy)",
+       y = "Irányított hiba (Relatív)",
+       x = "Időtartam kondíciók",
+       color = "Csoport")
+
+print(plot_lmer_ma)
+
+ggsave("plots/plot_lmer_ma.png", plot = plot_lmer_ma, height = 12, width = 20, units = "cm", dpi = 300)
+
+```
+
+``` {r kruskal}
+
+# 1. Adatok előkészítése a KÖZEPES kondícióra
+dat_medium_acc <- dat_acc %>%
+  filter(ref_category == "1,35 mp (közepes)") %>%
+  group_by(ID, group) %>%
+  summarise(
+    # A CE (Constant Error) az átlagos irányított hiba
+    ce = mean(acc_error, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 2. Kruskal-Wallis teszt (Omnibus teszt)
+kw_acc_medium <- dat_medium_acc %>% kruskal_test(ce ~ group)
+
+# 3. Post-hoc teszt (Dunn-teszt) és effektusméret
+dunn_acc_medium <- dat_medium_acc %>% dunn_test(ce ~ group, p.adjust.method = "holm")
+wx_eff_medium <- dat_medium_acc %>% wilcox_effsize(ce ~ group, p.adjust.method = "holm")
+
+# Eredmények megjelenítése
+print("--- KRUSKAL-WALLIS: ACCURACY (1,35 mp) ---")
+print(kw_acc_medium)
+
+print("--- POST-HOC (DUNN): CSOPORTKÜLÖNBSÉGEK ---")
+print(dunn_acc_medium)
+
+print("--- EFFEKTUSMÉRETEK ---")
+print(wx_eff_medium)
+
+```
+
+``` {r ce accuracy}
+
+# {r accuracy ce analysis}
+
+# 1. Adatok aggregálása (CE számítása személyenként és kondíciónként)
+dat_ce <- dat_acc %>%
+  group_by(ID, group, ref_category) %>%
+  summarise(
+    ce = mean(acc_error, na.rm = TRUE),
+    n_trials = n(), 
+    .groups = "drop")
+
+# 2. Leíró statisztika csoportonként és kondíciónként
+ce_summary <- dat_ce %>%
+  group_by(ref_category, group) %>%
+  summarise(
+    mean_ce = mean(ce, na.rm = TRUE),
+    sd_ce = sd(ce, na.rm = TRUE),
+    median_ce = median(ce, na.rm = TRUE),
+    .groups = "drop" )
+
+print("--- LEÍRÓ STATISZTIKÁK (CE) ---")
+print(ce_summary)
+
+# 3. Statisztikai összehasonlítás (Kruskal-Wallis és Effektusméret)
+ce_stats <- dat_ce %>%
+  group_by(ref_category) %>%
+  do({
+    kw <- kruskal_test(., ce ~ group)
+    eff <- kruskal_effsize(., ce ~ group)
+    data.frame(kw, eff_size = eff$effsize, magnitude = eff$magnitude)
+  }) %>%
+  ungroup()
+
+print("--- KRUSKAL-WALLIS EREDMÉNYEK (CE) ---")
+print(ce_stats)
+
+# 4. Post-hoc teszt a csoportok közötti konkrét eltérésekre
+ce_posthoc <- dat_ce %>%
+  group_by(ref_category) %>%
+  dunn_test(ce ~ group, p.adjust.method = "holm")
+
+print("--- DUNN POST-HOC TESZTEK (CE) ---")
+print(ce_posthoc)
+
+```
+
+```{r ce visualization accuracy}
+
+# 1. Színpaletta (ugyanaz a konzisztencia miatt)
+acc_colors <- c("Kontrollcsoport" = "#66C2A5", 
+                "Magas bipoláris zavar kockázat" = "#FC8D62", 
+                "Magas szkizofrénia-kockázat" = "#BC80BD")
+
+# 2. Ábrázolás
+plot_ce_accuracy <- ggplot(dat_ce, aes(x = ref_category, y = ce, color = group, group = group)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", alpha = 0.5, size = 0.8) +
+  stat_summary(fun.data = mean_cl_boot, 
+               geom = "errorbar", 
+               width = 0.1, 
+               size = 1,
+               position = position_dodge(0.4)) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               size = 4,
+               position = position_dodge(0.4)) +
+  scale_color_manual(values = acc_colors) +
+  theme_minimal() +
+  labs(title = "Szisztematikus pontosság (accuracy)",
+       subtitle = "A nulla érték jelzi a tökéletes időreprodukciót",
+       y = "Konstans Hiba (CE)",
+       x = "Időtartam kondíciók",
+       color = "Csoport")
+
+print(plot_ce_accuracy)
+
+
+ggsave("plots/plot_ce_accuracy.png", plot = plot_ce_accuracy, height = 12, width = 20, units = "cm", dpi = 300)
+
+```

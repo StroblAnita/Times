@@ -134,39 +134,87 @@ dat_plot_descr <- dat %>%
   summarise(prod_mean = mean(prod_int, na.rm = TRUE)) %>%
   ungroup()
   
-colors <- c("Magas szkizofrénia-kockázat" = "#66C2A5",
-            "Magas bipoláris zavar kockázat" = "#80B1D3",
-            "Kontrollcsoport" = "#FC8D62FF") 
+colors <- c("Kontrollcsoport" = "#66C2A5", 
+               "Magas bipoláris zavar kockázat" = "#FC8D62", 
+               "Magas szkizofrénia-kockázat" = "#BC80BD")
 
 plot_bp_descr <- ggplot(dat_plot_descr, aes(x = ref_category, y = prod_mean, fill = group)) +
   geom_hline(yintercept = c(0.65, 1.35, 1.85), 
              color = "darkgrey", 
              linetype = "dashed", 
              linewidth = 0.8) +
-  geom_boxplot(outlier.color = "grey30", outlier.shape = 16, outlier.size = 1.5,
-               alpha = 0.9) +
+  geom_boxplot(outlier.color = "grey30", outlier.shape = 16, outlier.size = 1,
+               alpha = 0.9, color = "grey30", linewidth = 0.3) +
   scale_fill_manual(name = "Vizsgálati csoport",
-                    labels = c("Magas szkizofrénia-kockázat", 
+                    labels = c("Kontrollcsoport",
                                "Magas bipoláris zavar kockázat",
-                               "Kontrollcsoport"),
+                               "Magas szkizofrénia-kockázat"),
                     values = colors) + 
   labs(
     title = "Reprodukált időtartamok a csoportonként",
     x = "Referencia inger",
     y = "Reprodukált idő",
     fill = "Vizsgálati csoport") +
-  theme_minimal() +
-  theme(
-    legend.position = "right",
-    legend.title = element_text(size = 16),
-    legend.text = element_text(size = 14),
-    legend.key.size = unit(1, "cm"),
-    plot.title = element_text(face = "bold", size = 16),
-    axis.title = element_text(size = 14),
-    axis.text = element_text(size = 12))
+  theme_minimal()
 
 print(plot_bp_descr)
 
-ggsave("plots/plot_bp_descr.png", plot = plot_bp_descr, width = 30, height = 15, units = "cm", dpi = 300)
+ggsave("plots/plot_bp_descr.png", plot = plot_bp_descr, width = 20, height = 12, units = "cm", dpi = 300)
+
+```
+``` {r}
+
+# --- 1. ADATELŐKÉSZÍTÉS ---
+
+# Először meghatározzuk a résztvevők globális sorrendjét
+id_order <- dat_lmer %>%
+  group_by(ID, group) %>%
+  summarise(global_mean = mean(prod_int, na.rm = TRUE), .groups = "drop") %>%
+  arrange(group, global_mean) %>%
+  pull(ID)
+
+plot_data_aligned <- dat_lmer %>%
+  filter(ref_category %in% c("0,65 mp (rövid)", "1,35 mp (közepes)", "1,85 mp (hosszú)")) %>%
+  mutate(ID = factor(ID, levels = id_order)) %>%
+  mutate(target_time = as.numeric(str_extract(ref_category, "[0-9,]+") %>% str_replace(",", ".")))
+
+# Segéd-adatbázis a vízszintes célvonalakhoz
+hline_data <- data.frame(
+  ref_category = c("0,65 mp (rövid)", "1,35 mp (közepes)", "1,85 mp (hosszú)"),
+  target_time = c(0.65, 1.35, 1.85)
+)
+
+# --- 2. ÁBRÁZOLÁS ---
+
+cv_colors <- c("Kontrollcsoport" = "#66C2A5", 
+               "Magas bipoláris zavar kockázat" = "#FC8D62", 
+               "Magas szkizofrénia-kockázat" = "#BC80BD")
+
+plot_aligned <- ggplot(plot_data_aligned, aes(x = ID, y = prod_int, color = group)) +
+  geom_point(alpha = 0.5, size = 0.8) +
+    geom_hline(data = hline_data, aes(yintercept = target_time), 
+             linetype = "dashed", color = "black", size = 0.7, alpha = 0.6) +
+  facet_grid(ref_category ~ group, scales = "free_x", space = "free_x") +
+  coord_cartesian(ylim = c(0, 3)) +
+  scale_color_manual(values = cv_colors) +
+  theme_minimal() +
+  labs(
+    title = "Időreprodukciós válaszok eloszlása",
+    y = "Reprodukált időtartam (másodperc)",
+    x = "Résztvevők"
+  ) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(fill = "gray95", color = NA),
+    strip.text = element_text(face = "bold", size = 9),
+    legend.position = "none"
+  )
+
+print(plot_aligned)
+
+ggsave("plots/plot_3x3_aligned.png", plot = plot_aligned, width = 25, height = 14, units = "cm", dpi = 300)
 
 ```
