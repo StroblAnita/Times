@@ -5,7 +5,7 @@ date: "2026-04-09"
 output: html_document
 ---
 
-``` {r import database, message = FALSE}
+``` {r packages, message = FALSE}
 
 library(tidyverse)
 library(psych) 

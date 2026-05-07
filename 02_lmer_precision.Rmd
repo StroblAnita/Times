@@ -1,0 +1,258 @@
+---
+title: "02_lmer_variablity"
+author: "Stróbl Anita"
+date: "2026-04-09"
+output: html_document
+---
+
+``` {r packages, message = FALSE}
+
+library(tidyverse)
+library(psych) 
+library(rstatix)
+library(lme4)        
+library(lmerTest) 
+library(lmeresampler)
+library(performance) 
+library(sjPlot)
+library(emmeans)
+library(MuMIn)
+library(ggplot2)
+library(readxl)
+library(gtsummary)
+library(flextable)
+library(writexl)
+library(effsize)
+
+```
+
+``` {r import database, message = FALSE}
+
+dat <- read_csv("databases/dat_processed.csv")
+
+```
+
+``` {r lmer data}
+
+dat_lmer <- dat %>%
+  mutate(
+    ref_ms = as.numeric(ref_ms),
+    prod_int = as.numeric(prod_int)) %>%
+  group_by(ID, ref_category) %>% 
+  mutate(
+    prod_between = mean(prod_int, na.rm = TRUE),
+    prod_within = abs(prod_int - prod_between) / ref_ms) %>%
+  ungroup() %>%
+  mutate(group = relevel(factor(group), ref = "Kontrollcsoport")) 
+
+```
+
+``` {r check}
+
+# 1. Normalitás tesztelése (Shapiro-Wilk) kondíciónként és csoportonként
+normality_results <- dat_lmer %>%
+  group_by(ref_category, group) %>%
+  shapiro_test(prod_within)
+
+# 2. Szórás-homogenitás (Levene-teszt) kondíciónként
+homogeneity_results <- dat_lmer %>%
+  group_by(ref_category) %>%
+  levene_test(prod_within ~ group)
+
+# 3. Outlierek azonosítása (statisztikai alapon)
+outliers_results <- dat_lmer %>%
+  group_by(ref_category, group) %>%
+  identify_outliers(prod_within)
+
+# Eredmények kiíratása a konzolra
+print("--- NORMALITÁS (Shapiro-Wilk) ---")
+print(normality_results)
+
+print("--- SZÓRÁS-HOMOGENITÁS (Levene-teszt) ---")
+print(homogeneity_results)
+
+```
+
+``` {r lmer precision all in one}
+
+# library(emmeans)
+
+color <- c("#66C2A5", "#FC8D62", "#BC80BD")
+
+mv <- lmer(prod_within ~ group * ref_category + (1 | ID), data = dat_lmer)
+
+anova(mv)
+
+emmeans_mv <- emmeans(mv, pairwise ~ group | ref_category)
+summary(emmeans_mv)
+
+plot_lmer_precision <- plot_model(mv, 
+           type = "pred", 
+           terms = c("ref_category", "group"), 
+           dot.size = 3,
+           line.size = 1,
+           color = color) +
+  theme_minimal() +
+  labs(title = "Pontosság",
+       y = "Hiba mértéke",
+       x = "Időtartam kondíciók",
+       color = "Csoport")
+
+print(plot_lmer_precision)
+
+ggsave("plots/plot_lmer_precision.png", plot = plot_lmer_precision, height = 12, width = 20, units = "cm", dpi = 300)
+
+# VAGY a legprofibb módszer emmeans-szel:
+# Ez a modell becsült értékeit használja
+eff_size_em <- eff_size(emmeans_mv, method = "identity", edf = Inf, sigma = sigma(mv))
+
+summary(eff_size_em)
+
+```
+
+``` {r}
+
+dat_short <- dat_lmer %>%
+  filter(ref_category == "0,65 mp (rövid)") %>%
+  group_by(ID, group) %>%
+  summarise(
+    cv = sd(prod_int, na.rm = TRUE) / mean(prod_int, na.rm = TRUE),
+    mean_error = mean(prod_within, na.rm = TRUE)) %>%
+  ungroup()
+
+# Kruskal-Wallis teszt a rövid kondícióra
+kw_result <- dat_short %>% kruskal_test(cv ~ group)
+
+# Ha a kw_result szignifikáns (p < 0.05), jöhet a post-hoc:
+dunn_result <- dat_short %>% dunn_test(cv ~ group, p.adjust.method = "holm")
+wx_effsize <- dat_short %>% wilcox_effsize(cv ~ group, p.adjust.method = "holm")
+
+tibble(kw_result)
+tibble(dunn_result)
+tibble(wx_effsize)
+
+```
+
+``` {r precision cv analysis}
+
+# 1. Adatok tisztítása és aggregálása (CV számítása személyenként)
+dat_cv <- dat_lmer %>%
+  group_by(ID, group, ref_category) %>%
+  summarise(
+    cv = sd(prod_int, na.rm = TRUE) / mean(prod_int, na.rm = TRUE),
+    n_trials = n(), 
+    .groups = "drop")
+
+# 2. Leíró statisztika csoportonként és kondíciónként
+cv_summary <- dat_cv %>%
+  group_by(ref_category, group) %>%
+  summarise(
+    mean_cv = mean(cv, na.rm = TRUE),
+    sd_cv = sd(cv, na.rm = TRUE),
+    median_cv = median(cv, na.rm = TRUE),
+    .groups = "drop" )
+
+print(cv_summary)
+
+# 3. Statisztikai összehasonlítás (Kruskal-Wallis és Effektusméret)
+# Ezt minden kondícióra (rövid, közepes, hosszú) lefuttatjuk
+cv_stats <- dat_cv %>%
+  group_by(ref_category) %>%
+  do({
+    kw <- kruskal_test(., cv ~ group)
+    eff <- kruskal_effsize(., cv ~ group)
+    data.frame(kw, eff_size = eff$effsize, magnitude = eff$magnitude)
+  }) %>%
+  ungroup()
+
+print(cv_stats)
+
+# 4. Post-hoc teszt a csoportok közötti konkrét eltérésekre
+cv_posthoc <- dat_cv %>%
+  group_by(ref_category) %>%
+  dunn_test(cv ~ group, p.adjust.method = "holm")
+
+print(cv_posthoc)
+
+```
+
+```{r cv visualization like sjPlot}
+
+# 1. Színpaletta rögzítése a konzisztencia érdekében
+cv_colors <- c("Kontrollcsoport" = "#66C2A5", 
+               "Magas bipoláris zavar kockázat" = "#FC8D62", 
+               "Magas szkizofrénia-kockázat" = "#BC80BD")
+
+# 2. Ábrázolás
+plot_cv_precision <- ggplot(dat_cv, aes(x = ref_category, y = cv, color = group, group = group)) +
+  stat_summary(fun.data = mean_cl_boot, 
+               geom = "errorbar", 
+               width = 0.1, 
+               size = 1,
+               position = position_dodge(0.4)) +
+    stat_summary(fun = mean, 
+               geom = "point", 
+               size = 4,
+               position = position_dodge(0.4)) +
+    scale_color_manual(values = cv_colors) +
+    theme_minimal() +
+  labs(title = "Precizitás",
+       y = "Variációs Koefficiens (CV)",
+       x = "Időtartam kondíciók",
+       color = "Csoport") 
+
+print(plot_cv_precision)
+
+ggsave("plots/plot_cv_precision.png", plot = plot_cv_precision, height = 12, width = 20, units = "cm", dpi = 300)
+  
+```
+
+``` {r bootstrap}
+
+# boot_mv <- lmeresampler::bootstrap(mv, .f = fixef, type = "wild", 
+             # hccme =  "hc2", aux.dist = "mammen", 
+             # B = 1000, resample = c(TRUE, TRUE))
+
+boot_results <- confint(boot_mv, type = "perc") 
+
+print(boot_mv)
+
+# Konfidencia-intervallumok
+boot_ci <- confint(boot_mv, type = "perc") %>% 
+  as.data.frame() %>% 
+  rownames_to_column("term")
+
+print(boot_ci)
+
+```
+
+``` {r visualisation bootstrap}
+
+# 1. Adatok előkészítése a megjelenítéshez
+# Megkeressük az Interceptet (Kontroll @ 0,65 mp) és a csoport-eltéréseket
+plot_boot_data <- boot_results %>%
+  filter(term %in% c("(Intercept)", 
+                     "groupMagas szkizofrénia-kockázat", 
+                     "groupMagas bipoláris zavar kockázat")) %>%
+  mutate(term_label = case_when(
+    term == "(Intercept)" ~ "Kontroll (Bázis)",
+    str_detect(term, "szkizof") ~ "Szkizotíp eltérés",
+    str_detect(term, "bipol") ~ "Bipoláris eltérés"
+  ))
+
+# 2. Forest plot készítése
+ggplot(plot_boot_data, aes(x = reorder(term_label, lower), y = (lower + upper)/2)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", size = 0.8, alpha = 0.5) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2, size = 1.2, color = "#2c3e50") +
+  geom_point(size = 5, color = "#e74c3c") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Wild Bootstrap eredmények a rövid kondícióban (0,65 mp)",
+    subtitle = "95% Percentilis Konfidencia Intervallumok",
+    y = "Becsült hatás (Relatív hiba / Eltérés mértéke)",
+    x = ""
+  )
+
+```
+
